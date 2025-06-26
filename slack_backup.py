@@ -14,7 +14,7 @@ class SlackBackupTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Slack 백업 도구 v1.0")
-        self.root.geometry("600x700")
+        self.root.geometry("650x750")
         self.root.resizable(False, False)
         
         # 스타일 설정
@@ -119,7 +119,7 @@ class SlackBackupTool:
         log_frame = ttk.LabelFrame(main_frame, text="실행 로그", padding="10")
         log_frame.grid(row=9, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(15, 0))
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=8, width=65, wrap=tk.WORD)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, width=65, wrap=tk.WORD)
         self.log_text.pack()
         
         # 백업 중단 플래그
@@ -225,6 +225,14 @@ class SlackBackupTool:
                 self.cleanup_backup()
                 return
             
+            # 사용자 정보 가져오기
+            self.update_progress(15, "사용자 정보를 가져오는 중...")
+            users = {}
+            users_response = requests.get("https://slack.com/api/users.list", headers=headers)
+            if users_response.json().get("ok"):
+                for user in users_response.json().get("members", []):
+                    users[user['id']] = user.get('real_name', user.get('name', 'Unknown'))
+            
             # 채널 목록 가져오기
             self.update_progress(20, "채널 목록을 가져오는 중...")
             channels = self.get_channels(headers)
@@ -244,16 +252,30 @@ class SlackBackupTool:
                     return
                 
                 progress = 30 + (40 * i / len(channels))
-                channel_name = channel.get('name', channel.get('id', 'Unknown'))
+                
+                # 채널 이름 안전하게 가져오기
+                channel_name = channel.get('name')
+                if not channel_name:
+                    # DM의 경우 user ID를 사용
+                    if channel.get('is_im'):
+                        user_id = channel.get('user')
+                        channel_name = f"DM-{users.get(user_id, user_id)}"
+                    else:
+                        channel_name = channel.get('id', 'Unknown')
+                
                 self.update_progress(progress, f"채널 백업 중: {channel_name}")
                 self.log(f"채널 백업: {channel_name}")
                 
-                messages = self.get_channel_messages(headers, channel['id'])
-                if messages:
-                    all_messages[channel_name] = {
-                        'channel_info': channel,
-                        'messages': messages
-                    }
+                try:
+                    messages = self.get_channel_messages(headers, channel['id'])
+                    if messages:
+                        all_messages[channel_name] = {
+                            'channel_info': channel,
+                            'messages': messages
+                        }
+                except Exception as e:
+                    self.log(f"채널 {channel_name} 백업 중 오류: {str(e)}")
+                    continue
             
             # 데이터 저장
             self.update_progress(80, "파일로 저장하는 중...")
@@ -267,7 +289,7 @@ class SlackBackupTool:
             # HTML 생성
             if self.format_var.get() in ["HTML", "HTML + PDF"]:
                 self.update_progress(90, "HTML 파일 생성 중...")
-                html_file = self.create_html_output(all_messages, backup_folder)
+                html_file = self.create_html_output(all_messages, backup_folder, users)
                 self.log(f"HTML 파일 생성: {html_file}")
             
             # 완료
@@ -377,7 +399,7 @@ class SlackBackupTool:
         
         return messages
     
-    def create_html_output(self, all_messages, backup_folder):
+    def create_html_output(self, all_messages, backup_folder, users):
         html_content = """
 <!DOCTYPE html>
 <html lang="ko">
@@ -498,7 +520,7 @@ class SlackBackupTool:
         
         # 네비게이션 추가
         for channel_name in sorted(all_messages.keys()):
-            safe_id = channel_name.replace("#", "").replace(" ", "_")
+            safe_id = channel_name.replace("#", "").replace(" ", "_").replace("-", "_")
             html_content += f'            <li><a href="#{safe_id}">{channel_name}</a></li>\n'
         
         html_content += """
@@ -513,7 +535,7 @@ class SlackBackupTool:
         
         # 채널별 메시지 추가
         for channel_name, data in sorted(all_messages.items()):
-            safe_id = channel_name.replace("#", "").replace(" ", "_")
+            safe_id = channel_name.replace("#", "").replace(" ", "_").replace("-", "_")
             html_content += f"""
     <div class="channel" id="{safe_id}">
         <div class="channel-header">#{channel_name}</div>
@@ -525,11 +547,8 @@ class SlackBackupTool:
             
             for msg in messages:
                 timestamp = datetime.fromtimestamp(float(msg.get('ts', 0))).strftime("%Y-%m-%d %H:%M:%S")
-                users_response = requests.get("https://slack.com/api/users.list", headers=headers
-                users = {}
-                if users_response.json().get("ok") : 
-                    for user in users_response.json().get("members", []):
-                        users[user['id']] = user.get('real_name', user.get('name', 'Unknown'))
+                user_id = msg.get('user', 'Unknown')
+                username = users.get(user_id, user_id)
                 text = msg.get('text', '')
                 
                 # HTML 이스케이프
