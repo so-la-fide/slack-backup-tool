@@ -1,5 +1,6 @@
+import time
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog, scrolledtext
+from tkinter import ttk, messagebox, filedialog, scrolledtext, Canvas
 import threading
 import json
 import os
@@ -14,16 +15,30 @@ class SlackBackupTool:
     def __init__(self, root):
         self.root = root
         self.root.title("Slack 백업 도구 v1.0")
-        self.root.geometry("650x750")
+        self.root.geometry("600x700")
         self.root.resizable(False, False)
         
         # 스타일 설정
         style = ttk.Style()
         style.theme_use('clam')
         
-        # 메인 프레임
-        main_frame = ttk.Frame(root, padding="20")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        # 스크롤 가능한 캔버스 생성
+        canvas = Canvas(root)
+        scrollbar = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, padding="20")
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        main_frame = scrollable_frame
         
         # 타이틀
         title_label = ttk.Label(main_frame, text="🔄 Slack 백업 도구", font=('Arial', 20, 'bold'))
@@ -370,31 +385,48 @@ class SlackBackupTool:
         # 메시지 가져오기
         messages = []
         cursor = None
+        request_count = 0
         
         while True:
             params = {
                 "channel": channel_id,
-                "limit": 100,
+                "limit": 15,  # 새로운 제한: 최대 15개
                 "oldest": oldest
             }
             if cursor:
                 params["cursor"] = cursor
             
-            response = requests.get(
-                "https://slack.com/api/conversations.history",
-                headers=headers,
-                params=params
-            )
-            
-            if not response.json().get("ok"):
-                break
-            
-            messages.extend(response.json().get("messages", []))
-            
-            # 페이징
-            response_metadata = response.json().get("response_metadata", {})
-            cursor = response_metadata.get("next_cursor")
-            if not cursor:
+            try:
+                response = requests.get(
+                    "https://slack.com/api/conversations.history",
+                    headers=headers,
+                    params=params
+                )
+                
+                if response.status_code == 429:  # Rate limit
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    self.log(f"API 제한 도달. {retry_after}초 대기...")
+                    time.sleep(retry_after)
+                    continue
+                
+                if not response.json().get("ok"):
+                    break
+                
+                messages.extend(response.json().get("messages", []))
+                
+                # 페이징
+                response_metadata = response.json().get("response_metadata", {})
+                cursor = response_metadata.get("next_cursor")
+                
+                request_count += 1
+                if cursor and request_count < 10:  # 채널당 최대 10회 요청
+                    self.log(f"  - {len(messages)}개 메시지 수집 중...")
+                    time.sleep(60)  # 분당 1회 제한
+                else:
+                    break
+                    
+            except Exception as e:
+                self.log(f"  오류: {str(e)}")
                 break
         
         return messages
