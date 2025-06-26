@@ -19,7 +19,7 @@ class SlackBackupTool:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Slack 백업 도구 v1.4")
+        self.root.title("Slack 백업 도구 v1.5")
         self.root.geometry("650x750")
         self.root.resizable(False, False)
         
@@ -253,10 +253,27 @@ class SlackBackupTool:
             users_map = {user['id']: user.get('real_name', user.get('name', 'Unknown'))
                          for user in self._fetch_all_pages("users.list", headers, "members")}
             
-            self.log("채널 목록 가져오는 중...")
+            # Step 2의 옵션에 따라 가져올 채널 유형 결정
+            types_to_fetch = []
+            if self.public_channels_var.get():
+                types_to_fetch.append("public_channel")
+            if self.private_channels_var.get():
+                types_to_fetch.append("private_channel")
+                types_to_fetch.append("mpim")
+            if self.direct_messages_var.get():
+                types_to_fetch.append("im")
+            
+            if not types_to_fetch:
+                self.log("선택된 채널 유형이 없습니다.")
+                self.available_channels = []
+                self.root.after(0, self._update_channel_listbox)
+                return
+
+            self.log(f"채널 목록 가져오는 중 ({', '.join(types_to_fetch)})...")
+            types_string = ",".join(types_to_fetch)
             all_convos = self._fetch_all_pages(
                 "conversations.list", headers, "channels", 
-                params={"types": "public_channel,private_channel,mpim,im", "limit": 200}
+                params={"types": types_string, "limit": 200}
             )
 
             fetched_channels = []
@@ -598,8 +615,8 @@ class SlackBackupTool:
                 
                 text_raw = msg.get('text', '')
                 text_escaped = html.escape(text_raw)
-                text_linked = re.sub(r'&lt;(https?://[^|]+?)\|(.+?)&gt;', r'<a href="\1" target="_blank">\2</a>', text_escaped)
-                text_linked = re.sub(r'&lt;(https?://[^>]+?)&gt;', r'<a href="\1" target="_blank">\1</a>', text_linked)
+                text_linked = re.sub(r'&lt;(https?://[^|]+?)\|(.+?)&gt;', r'<a href="\\1" target="_blank">\\2</a>', text_escaped)
+                text_linked = re.sub(r'&lt;(https?://[^>]+?)&gt;', r'<a href="\\1" target="_blank">\\1</a>', text_linked)
                 text_final = text_linked.replace('\n', '<br>')
 
                 message_html = f"""
