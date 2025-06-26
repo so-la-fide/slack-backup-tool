@@ -244,12 +244,13 @@ class SlackBackupTool:
                     return
                 
                 progress = 30 + (40 * i / len(channels))
-                self.update_progress(progress, f"채널 백업 중: {channel['name']}")
-                self.log(f"채널 백업: {channel['name']}")
+                channel_name = channel.get('name', channel.get('id', 'Unknown'))
+                self.update_progress(progress, f"채널 백업 중: {channel_name}")
+                self.log(f"채널 백업: {channel_name}")
                 
                 messages = self.get_channel_messages(headers, channel['id'])
                 if messages:
-                    all_messages[channel['name']] = {
+                    all_messages[channel_name] = {
                         'channel_info': channel,
                         'messages': messages
                     }
@@ -524,7 +525,11 @@ class SlackBackupTool:
             
             for msg in messages:
                 timestamp = datetime.fromtimestamp(float(msg.get('ts', 0))).strftime("%Y-%m-%d %H:%M:%S")
-                username = msg.get('user', 'Unknown')
+                users_response = requests.get("https://slack.com/api/users.list", headers=headers
+                users = {}
+                if users_response.json().get("ok") : 
+                    for user in users_response.json().get("members", []):
+                        users[user['id']] = user.get('real_name', user.get('name', 'Unknown'))
                 text = msg.get('text', '')
                 
                 # HTML 이스케이프
