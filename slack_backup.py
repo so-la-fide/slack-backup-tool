@@ -19,7 +19,7 @@ class SlackBackupTool:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Slack 백업 도구 v1.5")
+        self.root.title("Slack 백업 도구 v1.6")
         self.root.geometry("650x750")
         self.root.resizable(False, False)
         
@@ -300,10 +300,19 @@ class SlackBackupTool:
             self.root.after(0, lambda: self.load_channels_button.config(state=tk.NORMAL, text="채널 목록 새로고침"))
 
     def _fetch_all_pages(self, api_method, headers, response_key, params=None):
+        """
+        Slack API 페이징 처리를 위한 헬퍼 함수.
+        사용자 중단 요청을 즉시 감지하도록 수정되었습니다.
+        """
         if params is None: params = {}
         items = []
         cursor = None
         while True:
+            # 사용자 중단 요청 즉시 확인
+            if self.stop_backup:
+                self.log("API 호출 중지 (사용자 요청)")
+                break
+
             page_params = params.copy()
             if cursor:
                 page_params["cursor"] = cursor
@@ -313,7 +322,15 @@ class SlackBackupTool:
             if response.status_code == 429:
                 retry_after = int(response.headers.get('Retry-After', 30))
                 self.log(f"API 제한 도달. {retry_after}초 대기...")
-                time.sleep(retry_after)
+                # 대기 시간 중에도 중단 요청을 확인할 수 있도록 1초씩 나누어 대기
+                for _ in range(retry_after):
+                    if self.stop_backup:
+                        break
+                    time.sleep(1)
+                
+                if self.stop_backup: # 루프를 탈출하기 위해 한번 더 확인
+                    self.log("API 대기 중 중단됨 (사용자 요청)")
+                    break
                 continue
 
             response.raise_for_status()
@@ -597,7 +614,7 @@ class SlackBackupTool:
         
         # 메인 콘텐츠 헤더 생성
         main_content_parts = [
-            f'<div class="content">',
+            '<div class="content">',
             f'<div class="header"><h1>Slack 대화 백업{status_title}</h1><p>백업 일시: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>{status_warning}</div>'
         ]
 
