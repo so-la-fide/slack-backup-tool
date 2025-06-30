@@ -19,8 +19,8 @@ class SlackBackupTool:
     """
     def __init__(self, root):
         self.root = root
-        self.root.title("Slack 백업 도구 v1.6")
-        self.root.geometry("650x750")
+        self.root.title("Slack 백업 도구 v1.7")
+        self.root.geometry("650x800") # 창 크기 조정
         self.root.resizable(False, False)
         
         # 스타일 설정
@@ -80,19 +80,20 @@ class SlackBackupTool:
         ttk.Checkbutton(step2_frame, text="다이렉트 메시지", variable=self.direct_messages_var).grid(row=1, column=0, sticky=tk.W)
         ttk.Checkbutton(step2_frame, text="스레드 댓글", variable=self.threads_var).grid(row=1, column=1, sticky=tk.W)
         
-        ttk.Label(step2_frame, text="백업 기간:").grid(row=3, column=0, sticky=tk.W, pady=(15, 5))
+        # 백업 내용 선택 (신규)
+        ttk.Label(step2_frame, text="백업 내용:").grid(row=2, column=0, sticky=tk.W, pady=(15, 5))
+        self.content_type_var = tk.StringVar(value="메시지 + 파일")
+        content_type_combo = ttk.Combobox(step2_frame, textvariable=self.content_type_var, width=20, state="readonly")
+        content_type_combo['values'] = ("메시지 + 파일", "메시지만", "파일만")
+        content_type_combo.current(0)
+        content_type_combo.grid(row=3, column=0, sticky=tk.W)
+
+        ttk.Label(step2_frame, text="백업 기간:").grid(row=2, column=1, sticky=tk.W, pady=(15, 5))
         self.period_var = tk.StringVar(value="전체 기간")
         period_combo = ttk.Combobox(step2_frame, textvariable=self.period_var, width=20, state="readonly")
         period_combo['values'] = ("전체 기간", "최근 1개월", "최근 3개월", "최근 6개월", "최근 1년")
         period_combo.current(0)
-        period_combo.grid(row=4, column=0, sticky=tk.W)
-        
-        ttk.Label(step2_frame, text="출력 형식:").grid(row=3, column=1, sticky=tk.W, pady=(15, 5))
-        self.format_var = tk.StringVar(value="HTML")
-        format_combo = ttk.Combobox(step2_frame, textvariable=self.format_var, width=20, state="readonly")
-        format_combo['values'] = ("HTML",) # PDF 기능은 추후 확장 예정
-        format_combo.current(0)
-        format_combo.grid(row=4, column=1, sticky=tk.W)
+        period_combo.grid(row=3, column=1, sticky=tk.W)
         
         # Step 3: 채널 선택
         channel_frame = ttk.LabelFrame(main_frame, text="Step 3: 채널 선택 (선택사항)", padding="10")
@@ -197,13 +198,12 @@ class SlackBackupTool:
     5. Scopes 섹션의 "User Token Scopes"에서 
        "Add an OAuth Scope" 버튼 클릭 후 아래 권한 추가:
 
-       • channels:history (공개 채널 메시지 읽기)
-       • channels:read (공개 채널 목록 읽기)
-       • groups:history (비공개 채널 메시지 읽기)
-       • groups:read (비공개 채널 목록 읽기)
-       • im:history (DM 메시지 읽기)
-       • im:read (DM 목록 읽기)
-       • users:read (사용자 정보 읽기)
+       • channels:history, channels:read
+       • groups:history, groups:read
+       • im:history, im:read
+       • mpim:history, mpim:read (그룹DM)
+       • users:read (사용자 정보)
+       • files:read (파일 읽기)
 
     6. 페이지 상단의 "Install to Workspace" 클릭 및 허용
 
@@ -253,7 +253,6 @@ class SlackBackupTool:
             users_map = {user['id']: user.get('real_name', user.get('name', 'Unknown'))
                          for user in self._fetch_all_pages("users.list", headers, "members")}
             
-            # Step 2의 옵션에 따라 가져올 채널 유형 결정
             types_to_fetch = []
             if self.public_channels_var.get():
                 types_to_fetch.append("public_channel")
@@ -300,15 +299,10 @@ class SlackBackupTool:
             self.root.after(0, lambda: self.load_channels_button.config(state=tk.NORMAL, text="채널 목록 새로고침"))
 
     def _fetch_all_pages(self, api_method, headers, response_key, params=None):
-        """
-        Slack API 페이징 처리를 위한 헬퍼 함수.
-        사용자 중단 요청을 즉시 감지하도록 수정되었습니다.
-        """
         if params is None: params = {}
         items = []
         cursor = None
         while True:
-            # 사용자 중단 요청 즉시 확인
             if self.stop_backup:
                 self.log("API 호출 중지 (사용자 요청)")
                 break
@@ -322,13 +316,12 @@ class SlackBackupTool:
             if response.status_code == 429:
                 retry_after = int(response.headers.get('Retry-After', 30))
                 self.log(f"API 제한 도달. {retry_after}초 대기...")
-                # 대기 시간 중에도 중단 요청을 확인할 수 있도록 1초씩 나누어 대기
                 for _ in range(retry_after):
                     if self.stop_backup:
                         break
                     time.sleep(1)
                 
-                if self.stop_backup: # 루프를 탈출하기 위해 한번 더 확인
+                if self.stop_backup:
                     self.log("API 대기 중 중단됨 (사용자 요청)")
                     break
                 continue
@@ -434,10 +427,14 @@ class SlackBackupTool:
             
             if self.stop_backup: return
 
-            self.update_progress(20, "메시지 다운로드 시작...")
+            self.update_progress(20, "데이터 다운로드 시작...")
             all_messages = {}
             total_channels = len(target_channels)
             
+            content_type = self.content_type_var.get()
+            save_messages = content_type in ["메시지 + 파일", "메시지만"]
+            download_files = content_type in ["메시지 + 파일", "파일만"]
+
             for i, channel_info in enumerate(target_channels):
                 if self.stop_backup:
                     self.log("사용자 요청으로 백업을 중단합니다.")
@@ -445,17 +442,26 @@ class SlackBackupTool:
                 
                 progress = 20 + (70 * (i / total_channels))
                 channel_name = channel_info['name']
-                self.update_progress(progress, f"채널 백업 중 ({i+1}/{total_channels}): {channel_name}")
-                self.log(f"채널 백업 시작: {channel_name}")
+                self.update_progress(progress, f"채널 처리 중 ({i+1}/{total_channels}): {channel_name}")
+                self.log(f"채널 처리 시작: {channel_name}")
                 
                 try:
                     messages = self.get_channel_messages(headers, channel_info['id'])
-                    if messages:
+                    if save_messages and messages:
                         all_messages[channel_name] = {'messages': messages}
+                    
+                    if download_files and messages:
+                        self.log(f"  - {channel_name} 채널의 파일 다운로드를 시작합니다.")
+                        for msg in messages:
+                            if self.stop_backup: break
+                            if 'files' in msg:
+                                for file_info in msg['files']:
+                                    if self.stop_backup: break
+                                    self._download_file(file_info, backup_folder, headers)
                 except Exception as e:
-                    self.log(f"채널 {channel_name} 백업 중 오류: {e}")
+                    self.log(f"채널 {channel_name} 처리 중 오류: {e}")
                 
-            if self.save_on_cancel and all_messages:
+            if self.save_on_cancel:
                 self.log("중단됨 - 현재까지 수집한 데이터를 저장합니다...")
                 self.save_backup_files(all_messages, backup_folder, users_map, is_partial=True)
                 messagebox.showinfo("백업 중단", f"백업이 중단되었지만, 현재까지의 내용은 아래 폴더에 저장되었습니다:\n{backup_folder}")
@@ -475,6 +481,26 @@ class SlackBackupTool:
             messagebox.showerror("백업 실패", f"백업 중 오류가 발생했습니다:\n{e}")
         finally:
             self.root.after(0, self.cleanup_ui)
+
+    def _download_file(self, file_info, backup_folder, headers):
+        files_dir = backup_folder / "files"
+        files_dir.mkdir(exist_ok=True)
+        
+        url = file_info.get('url_private_download')
+        filename = file_info.get('name', 'unknown_file')
+        if not url:
+            return
+
+        filepath = files_dir / filename
+        try:
+            self.log(f"    - 파일 다운로드 중: {filename}")
+            res = requests.get(url, headers=headers, stream=True)
+            res.raise_for_status()
+            with open(filepath, 'wb') as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        except Exception as e:
+            self.log(f"    - 파일 다운로드 실패 ({filename}): {e}")
 
     def cleanup_ui(self):
         self.backup_button.config(state=tk.NORMAL)
@@ -525,13 +551,17 @@ class SlackBackupTool:
         status_prefix = "부분 " if is_partial else ""
         file_suffix = "_PARTIAL" if is_partial else ""
 
-        json_file = backup_folder / f"slack_backup{file_suffix}.json"
-        with open(json_file, 'w', encoding='utf-8') as f:
-            json.dump(messages_data, f, ensure_ascii=False, indent=2)
-        self.log(f"{status_prefix}JSON 파일 저장 완료: {json_file}")
-        
-        if self.format_var.get() == "HTML":
-            self.create_html_output(messages_data, backup_folder, users_map, is_partial)
+        # 메시지 데이터가 있을 경우에만 JSON과 HTML 저장
+        if messages_data:
+            json_file = backup_folder / f"slack_backup{file_suffix}.json"
+            with open(json_file, 'w', encoding='utf-8') as f:
+                json.dump(messages_data, f, ensure_ascii=False, indent=2)
+            self.log(f"{status_prefix}JSON 파일 저장 완료: {json_file}")
+            
+            if self.format_var.get() == "HTML":
+                self.create_html_output(messages_data, backup_folder, users_map, is_partial)
+        else:
+            self.log("저장할 메시지 데이터가 없어 파일만 다운로드했습니다.")
     
     def open_folder(self, path):
         try:
@@ -545,17 +575,12 @@ class SlackBackupTool:
             self.log(f"폴더를 여는 데 실패했습니다: {e}")
 
     def create_html_output(self, all_messages, backup_folder, users, is_partial=False):
-        """
-        HTML 파일을 생성합니다. 가독성과 유지보수성을 위해 각 부분을 분리하여 생성 후 조립합니다.
-        """
         file_suffix = "_PARTIAL" if is_partial else ""
         html_file_path = backup_folder / f"backup{file_suffix}.html"
         
         status_title = " (부분 백업)" if is_partial else ""
         status_warning = '<p style="color: orange; font-weight: bold;">⚠️ 백업이 중단되어 일부 채널만 포함되어 있을 수 있습니다.</p>' if is_partial else ''
 
-        # --- HTML 각 부분을 명확하게 분리하여 생성 ---
-        
         css_style = """
 <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif; line-height: 1.6; color: #262626; margin: 0; background: #f8f8f8; }
@@ -576,6 +601,8 @@ class SlackBackupTool:
     .timestamp { color: #616061; font-size: 12px; }
     .message-text { color: #1d1c1d; white-space: pre-wrap; word-wrap: break-word; }
     .message-text a { color: #1264a3; text-decoration: underline; }
+    .attachments { margin-top: 10px; padding-left: 15px; border-left: 2px solid #e8e8e8; }
+    .attachment-file a { display: inline-block; padding: 5px 10px; background-color: #f1f1f1; border-radius: 4px; text-decoration: none; color: #333; margin-top: 5px; }
     .nav h3 { margin-top: 0; margin-bottom: 15px; color: #4a154b; font-size: 18px; }
     .nav ul { list-style: none; padding: 0; margin: 0; }
     .nav li a { color: #1264a3; text-decoration: none; font-size: 14px; display: block; padding: 8px 12px; border-radius: 5px; cursor: pointer; transition: background-color 0.2s; }
@@ -602,9 +629,6 @@ class SlackBackupTool:
     };
 </script>
 """
-        # --- HTML 본문 생성 시작 ---
-        
-        # 내비게이션 메뉴 생성
         nav_menu_items = []
         for channel_name in sorted(all_messages.keys()):
             safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', channel_name)
@@ -612,13 +636,11 @@ class SlackBackupTool:
             nav_menu_items.append(f'<li><a onclick="showChannel(\'{safe_id}\', this)">{display_name}</a></li>')
         nav_menu_html = f'<div class="nav"><h3>채널 목록</h3><ul>{"".join(nav_menu_items)}</ul></div>'
         
-        # 메인 콘텐츠 헤더 생성
         main_content_parts = [
             '<div class="content">',
             f'<div class="header"><h1>Slack 대화 백업{status_title}</h1><p>백업 일시: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>{status_warning}</div>'
         ]
 
-        # 각 채널의 메시지 콘텐츠 생성
         for channel_name, data in sorted(all_messages.items()):
             safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', channel_name)
             display_name = html.escape(channel_name)
@@ -636,44 +658,42 @@ class SlackBackupTool:
                 text_linked = re.sub(r'&lt;(https?://[^>]+?)&gt;', r'<a href="\\1" target="_blank">\\1</a>', text_linked)
                 text_final = text_linked.replace('\n', '<br>')
 
-                message_html = f"""
+                message_html = [f"""
                 <div class="message">
                     <div class="message-avatar"></div>
                     <div class="message-content">
                         <div class="message-header"><span class="username">{username}</span><span class="timestamp">{timestamp}</span></div>
                         <div class="message-text">{text_final}</div>
-                    </div>
-                </div>"""
-                channel_html_parts.append(message_html)
+                """]
+
+                if 'files' in msg:
+                    message_html.append('<div class="attachments">')
+                    for file_info in msg['files']:
+                        file_name = html.escape(file_info.get('name', ''))
+                        file_link = f'./files/{file_name}'
+                        message_html.append(f'<div class="attachment-file"><a href="{file_link}" target="_blank">{file_name}</a></div>')
+                    message_html.append('</div>')
+
+                message_html.append('</div></div>')
+                channel_html_parts.append("".join(message_html))
                 
             channel_html_parts.extend(['</div></div>'])
             main_content_parts.append("".join(channel_html_parts))
 
         main_content_parts.append('</div>')
         
-        # --- 모든 HTML 조각들을 최종본으로 조립 ---
         final_html_parts = [
-            '<!DOCTYPE html>',
-            f'<html lang="ko">',
-            '<head>',
-            '    <meta charset="UTF-8">',
-            '    <meta name="viewport" content="width=device-width, initial-scale=1.0">',
-            f'    <title>Slack 백업{status_title}</title>',
-            css_style,
-            '</head>',
-            '<body>',
-            '    <div class="container">',
-            nav_menu_html,
-            "".join(main_content_parts),
-            '    </div>',
-            javascript_code,
-            '</body>',
-            '</html>'
+            '<!DOCTYPE html>', f'<html lang="ko">', '<head>',
+            '<meta charset="UTF-8">', '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+            f'<title>Slack 백업{status_title}</title>', css_style,
+            '</head>', '<body>', '<div class="container">',
+            nav_menu_html, "".join(main_content_parts),
+            '</div>', javascript_code,
+            '</body>', '</html>'
         ]
         
         final_html = "\n".join(final_html_parts)
 
-        # 파일에 쓰기
         try:
             with open(html_file_path, 'w', encoding='utf-8') as f:
                 f.write(final_html)
